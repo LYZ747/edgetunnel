@@ -51,6 +51,9 @@ on:
         type: "string"
     # secrets:
 
+permissions:
+  actions: write
+
 env:
   workerName: ${{inputs.CF_WORKER_NAME || vars.CF_WORKER_NAME}}
   pageName: ${{inputs.CF_PAGE_NAME || vars.CF_PAGE_NAME}}
@@ -138,7 +141,5 @@ jobs:
   workflow-keepalive:
     if: ${{ github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
     steps:
       - uses: liskin/gh-workflow-keepalive@v1

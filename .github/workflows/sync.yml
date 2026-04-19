@@ -11,6 +11,10 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   sync_upstream:
     if: github.event.repository.fork
@@ -58,7 +62,5 @@ jobs:
   workflow-keepalive:
     if: github.event.repository.fork && github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
     steps:
       - uses: liskin/gh-workflow-keepalive@v1
