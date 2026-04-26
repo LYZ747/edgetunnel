@@ -1,5 +1,5 @@
 {
-  "name": "cf",
+  "name": "edgetunnel",
   "version": "1.0.0",
   "description": "",
   "type": "module",
@@ -19,9 +19,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GeekSnail/cf.git"
+    "url": "git+https://github.com/GeekSnail/edgetunnel.git"
   },
   "author": "",
   "license": "ISC",
-  "homepage": "https://github.com/GeekSnail/cf#readme"
+  "homepage": "https://github.com/GeekSnail/edgetunnel#readme"
 }

@@ -3,9 +3,9 @@ import path from "node:path";
 import readline from "node:readline";
 import { pathToFileURL } from "url";
 import { createRequire } from "module";
-
 import inCfcidr from "../src/cfcidr.js";
-import { toArray, toObj } from "../src/cfhostpat.js";
+import cfhostpat from "../src/cfhostpat.json" assert { type: "json" };
+import cfhostRE from "../src/cfhostpat.js";
 
 //https://forum.linuxfoundation.org/discussion/861047/lab-7-1-err-unsupported-esm-url-scheme
 const { resolve } = createRequire(import.meta.url);
@@ -37,15 +37,42 @@ async function handlePat(filename) {
   });
 }
 
+function toArray() {
+  return Object.entries(cfhostpat).reduce((r, [k, s]) => {
+    r.push(...s.split("|").map(v => v + "." + k));
+    return r;
+  }, []);
+}
+function toLines() {
+  return toArray().join("\n");
+}
+function toObj(arr) {
+  return arr
+    .map(d => {
+      let ps = d.split(".");
+      return [ps.pop(), ps.join(".")];
+    })
+    .sort()
+    .reduce((r, d) => {
+      r[d[0]] ? (r[d[0]] += "|" + d[1]) : (r[d[0]] = d[1]);
+      return r;
+    }, {});
+}
+
+const isAsync = fn => fn.constructor.name === "AsyncFunction";
+
 const argv = process.argv.slice(2);
-if (argv.length == 1) handleLine(argv[0]).then(r => console.log(r.join("\n")));
-else if (argv.length >= 2) {
-  const arg = argv.shift();
-  try {
-    const f = eval(arg);
-    if (typeof f == "function") f(...argv).then(r => r && console.log(r));
-    else if (typeof f != undefined) console.log(f.toString());
-  } catch (e) {
-    console.error("no function:", arg);
-  }
+const arg = argv.shift();
+try {
+  const f = eval(arg);
+  let r;
+  if (typeof f == "function")
+    if (isAsync(f)) {
+      r = await f(...argv);
+      if (arg == "handleLine") r = r.join("\n");
+    } else r = f(...argv);
+  else if (typeof f != undefined) r = f.toString();
+  r && console.log(r);
+} catch (e) {
+  console.error(arg, e);
 }

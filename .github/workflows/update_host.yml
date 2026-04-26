@@ -78,12 +78,12 @@ env:
 
   CFHOST: cfhost
   CFHOST_BAK: cfhost_bak
-  CFHOST_JSON: src/cfhost.json
-  CFHOSTPAT_JS: src/cfhostpat.js
-  CFHOSTPAT_JSON: src/cfhostpat.json
   PROXYS_UPDATED: proxys_updated
+  CFHOST_JSON: src/cfhost.json
+  CFHOSTPAT_JSON: src/cfhostpat.json
   PROXYS_JSON: src/proxys.json
   SENSITIVE_TXT: sensitive.txt
+  FILTERHOST: .github/filterhost.mjs
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:

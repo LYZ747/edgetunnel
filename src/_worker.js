@@ -1,16 +1,10 @@
 // @ts-ignore
 import { connect } from "cloudflare:sockets";
-import CF, { cfhostRE, inCfcidr } from "./cfutil";
+import CF, { cfhostRE, inCfcidr, isIpv4, random } from "./cfutil";
 import proxys from "./proxys.json";
 import cfhost from "./cfhost.json";
+import ui from "./user.html";
 
-// How to generate your own UUID:
-// [Windows] Press "Win + R", input cmd and run:  Powershell -NoExit -Command "[guid]::NewGuid()"
-let userID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
-
-// reversed proxy (Non-CF ISP)
-//const proxys = ["cdn-b100.xn--b6gac.eu.org"]
-// Anycast/cloudflare.com
 const domains = [
   "acm.org",
   "activehosted.com",
@@ -66,12 +60,20 @@ const domains = [
   "wto.org",
   "www.gov.se",
 ];
-let cfipApi = [
-  "https://addressesapi.090227.xyz/CloudFlareYes",
-  "https://ip.164746.xyz/ipTop10.html",
-  "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt",
-];
+const PREFIXES = { NL: ["2a02:898:146:64::"], US: ["2602:fc59:11:64::", "2602:fc59:b0:64::"] };
+const at = "QA==";
+const vl = "dmxlc3M=";
+const vr = "djJyYXk=";
+const ed = "RWRnZVR1bm5lbA==";
+
+// How to generate your own UUID:
+// [Windows] Press "Win + R", input cmd and run:  Powershell -NoExit -Command "[guid]::NewGuid()"
+let userID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+let cfipApi = ["https://ip.164746.xyz/ipTop10.html", "https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt"];
 let dohURL = "https://cloudflare-dns.com/dns-query"; // or https://dns.google/dns-query
+let proxyMode = "nat64"; // or "ip"
+let proxyCountry = "NL"; // or "US"
+
 const cf = new CF({ proxys, cfhost });
 
 export default {
@@ -85,14 +87,14 @@ export default {
     // uuid_validator(request);
     try {
       userID = env.UUID || userID;
-      if (!isValidUUID(userID)) {
-        throw new Error("uuid is invalid");
-      }
+      if (!isValidUUID(userID)) throw new Error("uuid is invalid");
       //proxy = env.PROXY || proxy;
       dohURL = env.DOH_URL || dohURL;
+      const url = new URL(request.url);
       const upgradeHeader = request.headers.get("Upgrade");
+      proxyMode = url.searchParams.get("pm") || proxyMode;
+      proxyCountry = url.searchParams.get("pc")?.toUpperCase() || proxyCountry;
       if (!upgradeHeader || upgradeHeader !== "websocket") {
-        const url = new URL(request.url);
         switch (url.pathname) {
           case `/cf`: {
             return new Response(JSON.stringify(request.cf, null, 4), {
@@ -105,20 +107,20 @@ export default {
           case `/${userID}`: {
             const host = request.headers.get("Host");
             if (/curl|wget/.test(request.headers.get("User-Agent"))) {
-              return new Response(vBaseConfig(userID, host, 443, host, true), {
+              return new Response(vSampleConfig(userID, host), {
                 status: 200,
                 headers: { "Content-Type": "text/plain;charset=utf-8" },
               });
             }
-            return new Response(getConfig(userID, host), {
+            return new Response(getUI(userID, host), {
               status: 200,
               headers: { "Content-Type": "text/html; charset=utf-8" },
             });
           }
           case `/sub/${userID}`: {
             // const url = new URL(request.url); const searchParams = url.searchParams;
-            if (env.CFIP_API) cfipApi = env.CFIP_API.split(/[\s|,]+/);
-            return new Response(await createSub(userID, request.headers), {
+            // if (env.CFIP_API) cfipApi = env.CFIP_API.split(/[\s|,]+/);
+            return new Response(await createSub(userID, request.headers, proxyMode), {
               status: 200,
               headers: { "Content-Type": "text/plain;charset=utf-8" },
             });
@@ -129,16 +131,19 @@ export default {
             });
             // return Response.redirect(`https://bestip.06151953.xyz/auto?host=${request.headers.get("Host")}&uuid=${userID}&path=/`, 301);
           }
+          case `/${userID}/sub`: {
+            return Response.redirect(`https://${request.headers.get("Host")}/sub/${userID}`);
+          }
           case "/":
-            const { cf: c } = request;
+            const { cf: c, headers: h } = request;
             const city = c.city || c.timezone.split("/")[1];
             const wh = "https://m.weathercn.com";
             const wu = wh + "/current-weather.do?partner=1000001071_hfaw";
             const page = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 		          <meta name="viewport" content="width=device-width, initial-scale=1.0">
               <title>来自-${city}</title></head>
-              <body><p>${c.country} - ${c.region || c.country} - ${c.city} | Timezone:${c.timezone}</p>
-              <p><a href="/cf">查看连接信息</a></p>
+              <body><p>${c.country} - ${c.region || c.country} - ${c.city} | Timezone:${c.timezone} | IP: ${h.get("cf-connecting-ip")}</p>
+              <p><a href="/cf">查看连接信息</a> | <a href="https://speedtest.net" target="_blank">测网速</a></p>
               <p><a id="link" href="${wu}" target="_blank">查看[<span id="cityName">${city}</span>]逐小时天气预报</a></p>
               <script>
                 fetch('${wh}/citysearchajax.do?partner=1000001071_hfaw&q=${city.replace(/_| /g, "")}').then(r => r.json()).then(r => {
@@ -336,36 +341,49 @@ async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawCli
    * @returns {Promise<void>} A Promise that resolves when the retry is complete.
    */
   async function retry() {
-    const proxy = await cf.getProxy(addressRemote, portRemote);
-    const tcpSocket = await connectAndWrite(proxy.host || addressRemote, portRemote);
+    let proxy;
+    if (proxyMode == "nat64") {
+      try {
+        if (!(typeof r == "number")) {
+          proxy = await getIPv6Proxy(addressRemote);
+        } else if (!addressRemote.includes(":")) {
+          proxy = convertToNAT64IPv6(addressRemote);
+        }
+      } catch (e) {
+        console.error("NAT64 resolution failed, fallback to Proxy IP", e);
+      }
+    }
+    if (!proxy) {
+      proxy = await cf.getProxy(addressRemote, portRemote);
+    }
+    const tcpSocket = await connectAndWrite(proxy || addressRemote, portRemote);
     if (!tcpSocket) {
       return safeCloseWebSocket(webSocket, 1011, "Failed to reconnect to remote");
     }
     tcpSocket.closed
       .catch(error => {
         console.error("retry tcpSocket closed error", error);
-        if (/HTTP|fetch/i.test(error) && proxy.host) cf.deleteProxy(proxy);
+        if (proxyMode != "nat64" && /HTTP|fetch/i.test(error) && proxy) cf.deleteProxy(proxy);
       })
-      .finally(() => {
-        safeCloseWebSocket(webSocket);
-      });
+      .finally(() => safeCloseWebSocket(webSocket));
     remoteSocketToWS(tcpSocket, webSocket, vResponseHeader, log);
   }
   let r = undefined;
-  if (!cfhostRE.test(addressRemote) && !cf.cfhost.has(addressRemote) && !(r = inCfcidr(addressRemote))) {
+  if (addressRemote.includes(":") || isIpv4.test(addressRemote)) r = inCfcidr(addressRemote);
+  else r = cf.cfhost.has(addressRemote) || cfhostRE.test(addressRemote);
+  if (r) {
+    log(`Hit proxy`);
+    retry(); // r: true|4|6
+  } else {
     const tcpSocket = await connectAndWrite(addressRemote, portRemote);
     if (!tcpSocket) {
       return safeCloseWebSocket(webSocket, 1011, "Failed to connect to remote");
     }
-    // when remoteSocket is ready, pass to websocket
-    // remote--> ws
+    // when remoteSocket is ready, pass to websocket. remote--> ws
     if (!(await remoteSocketToWS(tcpSocket, webSocket, vResponseHeader, log))) {
-      retry();
+      retry(); // r: false|undefined|0
       r === false && cf.tagCfhost(addressRemote);
     }
-  } else {
-    log(`Hit proxy for ${addressRemote}`);
-    retry();
   }
 }
 
@@ -622,6 +640,40 @@ async function remoteSocketToWS(remoteSocket, webSocket, vResponseHeader, log) {
   return hasIncomingData;
 }
 
+function convertToNAT64IPv6(ipv4) {
+  const parts = ipv4.split(".");
+  if (parts.length !== 4) {
+    throw new Error("Invalid IPv4");
+  }
+
+  const hex = parts.map(part => {
+    const num = parseInt(part, 10);
+    if (num < 0 || num > 255) throw new Error("Invalid IPv4 segment");
+    return num.toString(16).padStart(2, "0");
+  });
+  // const prefixes = ["2602:fc59:b0:64::"];
+  const prefix = random(PREFIXES[proxyCountry]) || PREFIXES["US"][0];
+  return `[${prefix}${hex[0]}${hex[1]}:${hex[2]}${hex[3]}]`;
+}
+
+async function getIPv6Proxy(domain) {
+  try {
+    const data = await fetch(`${dohURL}?name=${domain}&type=A`, {
+      headers: { Accept: "application/dns-json" },
+    }).then(r => r.json());
+
+    if (data.Answer && data.Answer.length > 0) {
+      const aRecord = data.Answer.find(r => r.type === 1);
+      if (aRecord) {
+        return convertToNAT64IPv6(aRecord.data);
+      }
+    }
+    throw new Error("Failed to resolve domain!");
+  } catch (err) {
+    throw new Error(`DNS resolution failed ${err.message}`);
+  }
+}
+
 /**
  * Decodes a base64 string into an ArrayBuffer.
  * @param {string} base64Str The base64 string to decode.
@@ -749,9 +801,7 @@ async function handleUDPOutBound(webSocket, vResponseHeader, log) {
             dohURL, // dns server url
             {
               method: "POST",
-              headers: {
-                "content-type": "application/dns-message",
-              },
+              headers: { "content-type": "application/dns-message" },
               body: chunk,
             },
           );
@@ -786,105 +836,37 @@ async function handleUDPOutBound(webSocket, vResponseHeader, log) {
     },
   };
 }
-const at = "QA==";
-const pt = "dmxlc3M=";
-const cl = "Y2xhc2g=";
-const ed = "RWRnZVR1bm5lbA==";
-function vBaseConfig(id, addr, port, host, tls = false, mark = "") {
+
+function decodeUI(hex) {
+  const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+  const decoded = bytes.map(b => b ^ 0x55);
+  return new TextDecoder().decode(decoded);
+}
+
+function vBaseConfig(id, addr, port, host, tls = false, mode = "nat64", mark = "") {
   const scp = tls ? `security=tls&sni=${host}` : "security=none";
-  return `${atob(pt)}://${id}${atob(at)}${addr}:${port}?${scp}&encryption=none&fp=chrome&type=ws&host=${host}&path=%2F%3Fed%3D2048#${addr}${mark}`;
-}
-/**
- *
- * @param {string} userID - single or comma separated userIDs
- * @param {string | null} hostName
- * @returns {string}
- */
-function getConfig(userID, hostName) {
-  const subUrl = `https://${hostName}/sub/${userID}`;
-  const vMain = vBaseConfig(userID, hostName, 443, hostName, true);
-  return `
-  <html>
-  <head>
-	<title>${atob(ed)}: ${atob(pt)} configuration</title>
-	<meta name='description' content='This is a tool for generating ${atob(pt)} protocol configurations.' />
-	<meta name='keywords' content='${atob(ed)}, cloudflare pages, cloudflare worker, severless' />
-	<meta name='viewport' content='width=device-width, initial-scale=1' />
-	<style>
-	body {
-	  font-family: 'Roboto', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-	  background-color: #f0f0f0;
-	  color: #333;
-    max-width: 900px;
-    margin: 20px auto;
-	}
-	a {
-	  color: #1a0dab;
-	  text-decoration: none;
-	}
-	img {
-	  max-width: 100%;
-	  height: auto;
-	}
-	pre {
-	  white-space: pre-wrap;
-	  word-wrap: break-word;
-	  background-color: #fff;
-	  border: 1px solid #ddd;
-	  padding: 15px;
-    margin: 0;
-	}
-	/* Dark mode */
-	@media (prefers-color-scheme: dark) {
-	  body {
-      background-color: #333;
-      color: #f0f0f0;
-	  }
-	  a {
-		  color: #9db4ff;
-	  }
-	  pre {
-      background-color: #282a36;
-      border-color: #6272a4;
-	  }
-	}
-	</style>
-	<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css'>
-  </head>
-  <body>
-  <div align='center'>
-    <p><img src="https://avatars.githubusercontent.com/u/16624315?v=4" style="height: 75px;border-radius: 50%;"></p>
-    <h4>欢迎！这是生成 ${atob(pt)} 协议的配置。</h4>
-    <p><a href="${subUrl}" class="btn" target="_blank">${atob(pt)}订阅</a> | 
-      <a href="${atob(cl)}://install-config?url=${encodeURIComponent(subUrl)}" class="btn" target="_blank">${atob(cl)}订阅</a> | 
-      <a href="https://url.v1.mk/sub?target=${atob(cl)}&url=${encodeURIComponent(
-        subUrl,
-      )}&insert=false&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true" class="btn" target="_blank">转${atob(cl)}格式</a> | 
-      <a href="//${hostName}/bestip/${userID}" class="btn" target="_blank">优选IP·订阅</a>
-    </p>
-  </div>
-  <pre><h3>UUID: ${userID}</h3>${atob(pt)} Configuration with default domain
----------------------------------------------------------------
-<code>${vMain}</code>
-<button onclick='copyToClipboard("${vMain}")'> <i class="fa fa-clipboard"></i> Copy Main</button>
----------------------------------------------------------------</pre>
-  <p align="center">相关说明见：<a href="https://my-onedrive.pages.dev/solutions/${atob(ed)}">${atob(ed)}</a></p>
-  <h3 align="center">若对您有帮助，可考虑给予支持，以便于后续的维护与优化，感激不尽🙏</h3>
-  </body>
-  <script>
-	function copyToClipboard(text) {
-	  navigator.clipboard.writeText(text)
-		.then(() => alert("Copied to clipboard"))
-		.catch(console.error);
-	}
-  </script>
-  </html>`;
+  const path = encodeURIComponent(`/?pm=${mode}`);
+  return `${atob(vl)}://${id}${atob(at)}${addr}:${port}?${scp}&encryption=none&fp=chrome&type=ws&host=${host}&path=${path}#${addr}${mark}${mode == "nat64" ? "-nat64" : ""}`;
 }
 
-const portSet_http = new Set([80, 8080, 8880, 2052, 2086, 2095, 2082]);
-const portSet_https = new Set([443, 8443, 2053, 2096, 2087, 2083]);
+function vSampleConfig(userID, host) {
+  const isWorker = host.endsWith("workers.dev");
+  return vBaseConfig(userID, isWorker ? domains[0] : host, isWorker ? 80 : 443, host, !isWorker);
+}
 
-async function createSub(userID, headers) {
+// ================= UI界面 =================
+function getUI(userID, host) {
+  const vSample = vSampleConfig(userID, host);
+  let html = decodeUI(ui);
+  return html
+    .replace("${pt}", host.endsWith("workers.dev") ? "WS" : "TLS + WS")
+    .replace("${vSample}", vSample)
+    .replace(/\$\{host\}/g, host)
+    .replace(/\$\{userID\}/g, userID);
+}
+
+// ==================== 生成订阅配置 ====================
+async function createSub(userID, headers, mode) {
   if (!/\.(\d+)$/.test(domains[domains.length - 1])) {
     let ps = cfipApi.map(u =>
       fetch(u, { headers })
@@ -892,26 +874,26 @@ async function createSub(userID, headers) {
         .catch(e => ""),
     );
     let ips = await Promise.allSettled(ps).then(rs => rs.reduce((acc, r) => (!r.value.includes("html") && acc.push(...r.value.split(/[^\.\d]+/)), acc), []).filter(e => e));
-    if (ips.length) domains.push(...ips.slice(0, 90));
+    if (ips.length) domains.push(...ips);
   }
+  const configs = [];
+  const portSet_http = [80, 8080, 8880, 2052, 2086, 2095, 2082];
+  const portSet_https = [443, 8443, 2053, 2096, 2087, 2083];
   const hostName = headers.get("Host");
-  const httpConf = !hostName.includes("workers.dev")
-    ? []
-    : Array.from(portSet_http).flatMap(port => {
-        const vMainHttp = vBaseConfig(userID, hostName, port, hostName, false, `-HTTP-${port}`);
-        return domains
-          .flatMap(domain => {
-            return vBaseConfig(userID, domain, port, hostName, false, `-HTTP-${port}`);
-          })
-          .concat(vMainHttp);
-      });
-  const httpsConf = Array.from(portSet_https).flatMap(port => {
-    const vMainHttps = hostName.includes("workers.dev") ? [] : vBaseConfig(userID, hostName, port, hostName, true, `-HTTPS-${port}`);
-    return domains
-      .flatMap(domain => {
-        return vBaseConfig(userID, domain, port, hostName, true, `-HTTPS-${port}`);
-      })
-      .concat(vMainHttps);
-  });
-  return btoa([...httpConf, ...httpsConf].join("\n"));
+
+  if (hostName.includes("workers.dev")) {
+    for (const port of portSet_http) {
+      for (const domain of domains) {
+        configs.push(vBaseConfig(userID, domain, port, hostName, false, mode, `-HTTP-${port}`));
+      }
+    }
+  } else {
+    domains.push(hostName);
+    for (const port of portSet_https) {
+      for (const domain of domains) {
+        configs.push(vBaseConfig(userID, domain, port, hostName, true, mode, `-HTTPS-${port}`));
+      }
+    }
+  }
+  return btoa(configs.join("\n"));
 }

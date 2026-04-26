@@ -1,4 +1,4 @@
-export { default as inCfcidr } from "./cfcidr";
+export { default as inCfcidr, isIpv4 } from "./cfcidr";
 export { default as cfhostRE } from "./cfhostpat";
 import kvWrap from "./kvWrap";
 
@@ -24,7 +24,7 @@ function symmetricDifference(a, b, separate = false) {
   return separate ? [[..._a], [..._b]] : [..._a];
 }
 
-export const randFrom = arr => (arr.length ? arr[Math.floor(Math.random() * arr.length)] : undefined);
+export const random = arr => (arr.length ? arr[Math.floor(Math.random() * arr.length)] : undefined);
 
 const delay = t =>
   new Promise(resolve => {
@@ -37,11 +37,11 @@ export default class CF {
   KEY_CFHOST = "cfhost";
 
   proxys = { 443: [], 80: [], openai: [], x: [] };
-  proxy = { 443: "", 80: "", openai: "", x: "", timestamp: 0 };
+  proxy = { 443: "", 80: "", openai: "", x: "" };
   proxysLoaded = false;
 
-  _cfhost = new Set(); //entry
-  cfhost = new Set(); //entry + cache
+  _cfhost; //entry
+  cfhost; //entry + cache
   cfhostRaw = false; //kv source
   cfhostLoaded = false;
 
@@ -52,10 +52,8 @@ export default class CF {
     if (KV) this.setKV(KV);
     if (proxys instanceof Array) this.proxys[443] = proxys;
     else this.proxys = proxys;
-    cfhost.forEach(e => {
-      this._cfhost.add(e);
-      this.cfhost.add(e);
-    });
+    this._cfhost = new Set(cfhost);
+    this.cfhost = new Set(cfhost);
     this.initProxy();
   }
   setKV(KV) {
@@ -65,15 +63,15 @@ export default class CF {
   initProxy(key) {
     if (key) {
       const arr = this.proxys[key];
-      if (!arr.length) this.proxy[key] = randFrom(this.proxys[443]) || ""; // fallback to 443
-      else this.proxy[key] = randFrom(arr);
+      if (!arr.length)
+        this.proxy[key] = random(this.proxys[443]) || ""; // fallback to 443
+      else this.proxy[key] = random(arr);
     } else {
       for (let k in this.proxys) {
         const arr = this.proxys[k];
-        if (arr.length && (!this.proxy[k] || !arr.includes(this.proxy[k]))) this.proxy[k] = randFrom(arr);
+        if (arr.length && (!this.proxy[k] || !arr.includes(this.proxy[k]))) this.proxy[k] = random(arr);
       }
     }
-    // this.proxy.timestamp = Date.now();
   }
   async getProxy(host, port) {
     let key = 443;
@@ -81,12 +79,11 @@ export default class CF {
       key = this.proxys.openai && this.proxys.openai.length ? "openai" : 443;
     } else if (/^((\w+\.)*(twitter|x)\.com|t\.co)$/.test(host)) {
       key = this.proxys.x && this.proxys.x.length ? "x" : 443;
-      // if (Date.now() - this.proxy.timestamp >= 3600000) this.initProxy("x");
     } else if (port == 80) {
       key = port;
     }
     if (!this.proxy[key] && !this.proxysLoaded) await this.loadProxys();
-    return { host: this.proxy[key], key };
+    return this.proxy[key];
   }
   loadCfhost() {
     const key = this.KEY_CFHOST;
@@ -106,7 +103,7 @@ export default class CF {
         this.initProxy();
       }
       console.log(
-        `KV ${this.KEY_PROXYS} loaded ${this.proxys[443].length}(443) ${this.proxys[80]?.length}(80) ${this.proxys["openai"]?.length}(openai) ${this.proxys["x"]?.length}(x)`
+        `KV ${this.KEY_PROXYS} loaded ${this.proxys[443].length}(443) ${this.proxys[80]?.length}(80) ${this.proxys["openai"]?.length}(openai) ${this.proxys["x"]?.length}(x)`,
       );
     });
   }
@@ -155,10 +152,12 @@ export default class CF {
           if (this[key].has(e)) ldiff.delete(e);
           else this[key].add(e);
         }
-        if (ldiff.size)
-          await this.KV.put(key, difference(this[key], this["_" + key])).then(() => {
+        if (ldiff.size) {
+          for (const e of ldiff) r.push(e);
+          await this.KV.put(key, r).then(() => {
             console.log(`tagged ${ldiff.toArray()} to KV`);
           });
+        }
       } else {
         await this.KV.put(key, difference(this[key], this["_" + key])).then(() => {
           this[key + "Raw"] = true;

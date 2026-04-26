@@ -7,10 +7,10 @@ const cfcidr = [{"1":[[0,-1],[257,-1]],"8":[[1680,-2],[1682,-1],[2535,-1],[2708,
 const ver = { 4: { partLen: 8, partShift: 256 }, 6: { partLen: 16, partShift: 65536 } };
 // const domainPat = /^((?!-))(xn--)?[a-z0-9][a-z0-9-_]{0,61}[a-z0-9]{0,1}\.(xn--)?([a-z0-9\-]{1,61}|[a-z0-9-]{1,30}\.[a-z]{2,})$/i
 const domainPat = /^((xn--)?[a-z0-9]([a-z0-9-]{0,60}[a-z0-9])?\.){1,3}[a-z]{2,}$/i;
-// return: invalid host -> undefined,
-//         domain notin -> false,
-//         ip notin -> 0,
-//         ip in -> ip version
+export const isIpv4 = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+/**
+ * @returns: {0,4,6} ip notin -> 0, ip in -> ip version
+ */        
 export default function inCfcidr(host, list = cfcidr) {
   let ip,
     ipLeft = 0,
@@ -32,13 +32,13 @@ export default function inCfcidr(host, list = cfcidr) {
       .slice(0, list["maxPrefixLen"] / 16);
     if (!c(ver[6])) return r;
     r = 6;
-  } else if ((ip = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/))) {
-    //let ip = host.split(".").map(Number);
+  } else {
+    ip = host.split(".").map(Number);
     list = list[0];
-    ip = ip.slice(1, 1 + list["maxPrefixLen"] / 8).map(Number);
+    ip = ip.slice(0, list["maxPrefixLen"] / 8).map(Number);
     if (!c(ver[4])) return r;
     r = 4;
-  } else return domainPat.test(host) ? false : undefined;
+  } // else return domainPat.test(host) ? false : undefined;
 
   if (ipMid < list[0][0]) return 0; //
   // Binary search

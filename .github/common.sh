@@ -42,7 +42,7 @@ filterhost() {
     [ ! -z "$ip" ] && [ "$ip" != '1.1.1.1' ] && echo $ip $d >> tocheck.txt
   done
   if [ -s tocheck.txt ]; then
-    node .github/filterhost.mjs $2 tocheck.txt
+    node $FILTERHOST $2 tocheck.txt
   #else 
   #  > $1
   fi
@@ -319,12 +319,14 @@ check_cfhost() {
   git pull --rebase
   if orig_owner && week_plan; then
     echo check $CFHOSTPAT_JSON ...
-    node $CFHOSTPAT_JS toLines > pat.txt
+    node $FILTERHOST toLines > pat.txt
+    cat pat.txt
     filterhost pat.txt handlePat
+    cat $CFHOSTPAT_JSON
 
     if [ -s local.txt ]; then
       echo check $CFHOST_JSON ...
-      filterhost local.txt > tmp
+      filterhost local.txt handleLine > tmp
       [ ! -s tmp ] && echo 'maybe filterhost error!' && exit 1
       file_lines_tojson tmp > $CFHOST_JSON
       mv tmp local.txt
@@ -354,14 +356,14 @@ check_cfhost() {
     # diff after manually update cfhostpat.json
     echo "check kv cfhost ..."
     local pat='^((xn--)?[a-z0-9]([a-z0-9-]{0,60}[a-z0-9])?\.){1,3}[a-z]{2,}$'
-    local cfpat=`node $CFHOSTPAT_JS cfhostRE|sed -r 's|^/(.*)/$|\1|'`
+    local cfpat=`node $FILTERHOST cfhostRE|sed -r 's|^/(.*)/$|\1|'`
     while read -r d; do
       ([[ ! $d =~ $pat ]] || [[ $d =~ $cfpat ]]) && sed -i '/'$d'/d' remote.txt && echo delete $d from remote.txt
     done < remote.txt
     echo "diff local, `wc -l remote.txt`" >> $GITHUB_STEP_SUMMARY
     
     if [ -s remote.txt ]; then
-      filterhost remote.txt > tmp && mv tmp remote.txt
+      filterhost remote.txt handleLine > tmp && mv tmp remote.txt
       echo "filter, `wc -l remote.txt`" >> $GITHUB_STEP_SUMMARY
     fi
 

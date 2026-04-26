@@ -1,8 +1,10 @@
 //https://github.com/cloudflare/workers-sdk/blob/main/packages/wrangler/src/deployment-bundle/bundle.ts
+const fs = require("fs");
 const path = require("path");
 const { NodeGlobalsPolyfillPlugin } = require("@esbuild-plugins/node-globals-polyfill");
 const { NodeModulesPolyfillPlugin } = require("@esbuild-plugins/node-modules-polyfill");
 const esbuild = require("esbuild");
+const { pathToFileURL } = require("url");
 
 var nodejsCompatPlugin = /* @__PURE__ */ silenceWarnings => ({
   name: "nodejs_compat imports plugin",
@@ -40,7 +42,7 @@ var nodejsCompatPlugin = /* @__PURE__ */ silenceWarnings => ({
           console.warn(
             `The package "${path67}" wasn't found on the file system but is built into node.
 Your Worker may throw errors at runtime unless you enable the "nodejs_compat" compatibility flag. Refer to https://developers.cloudflare.com/workers/runtime-apis/nodejs/ for more details. Imported from:
-${importers.map(i => ` - ${path.relative(pluginBuild.initialOptions.absWorkingDir ?? "/", i)}`).join("\n")}`
+${importers.map(i => ` - ${path.relative(pluginBuild.initialOptions.absWorkingDir ?? "/", i)}`).join("\n")}`,
           );
         });
       }
@@ -53,6 +55,54 @@ var cloudflareInternalPlugin = {
   setup(pluginBuild) {
     pluginBuild.onResolve({ filter: /^cloudflare:.*/ }, () => {
       return { external: true };
+    });
+  },
+};
+
+// 定义正则预编译插件
+const cfhostRegexPrecompilePlugin = {
+  name: "precompile-cfhost-regex",
+  setup(pluginBuild) {
+    // 拦截对 cfhostpat.js 的加载
+    pluginBuild.onLoad({ filter: /cfhostpat\.js$/ }, async args => {
+      // 1. 在构建时找到并读取真实的 JSON 文件
+      // const jsonPath = path.join(path.dirname(args.path), "cfhostpat.json");
+      // const jsonContent = await fs.promises.readFile(jsonPath, "utf8");
+      // const cfhostpat = JSON.parse(jsonContent);
+      // const cfhostpat = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+      // 2. 获取纯文件的绝对路径，在 CommonJS 中动态 import ESM 模块
+      const cfhostpatPath = path.join(path.dirname(args.path), "./cfhostpat.js");
+      const { generateRegexString } = await import(pathToFileURL(cfhostpatPath).href);
+      // 3. 执行逻辑并注入拼装好的 JS 代码
+      // 使用 JSON.stringify 安全包裹字符串，防止转义字符出错
+      const regexStr = generateRegexString();
+      const injectedCode = `export default new RegExp(${JSON.stringify(regexStr)});`;
+
+      return {
+        contents: injectedCode,
+        loader: "js",
+      };
+    });
+  },
+};
+
+var htmlObfuscatorPlugin = {
+  name: "html-obfuscator",
+  setup(pluginBuild) {
+    // 拦截所有 .html 文件的导入
+    pluginBuild.onLoad({ filter: /\.html$/ }, async args => {
+      // 读取原始明文 HTML
+      const htmlContent = await fs.promises.readFile(args.path, "utf8");
+      const buffer = Buffer.from(htmlContent);
+      const key = 0x55; // 混淆密钥
+      // 对每个字节进行异或操作
+      const xorData = buffer.map(b => b ^ key);
+      const hexString = xorData.toString("hex"); // 转成 16 进制字符串
+      // 返回一段 JS 代码，默认导出一个 Base64 字符串
+      return {
+        contents: `export default "${hexString}";`,
+        loader: "js",
+      };
     });
   },
 };
@@ -100,7 +150,12 @@ const buildOptions = {
     global: "globalThis",
   },
   loader: { ".js": "jsx", ".mjs": "jsx", ".cjs": "jsx" },
-  plugins: [...(opt.nodeCompat ? [NodeGlobalsPolyfillPlugin({ buffer: true }), NodeModulesPolyfillPlugin(), nodejsCompatPlugin(false)] : []), cloudflareInternalPlugin],
+  plugins: [
+    ...(opt.nodeCompat ? [NodeGlobalsPolyfillPlugin({ buffer: true }), NodeModulesPolyfillPlugin(), nodejsCompatPlugin(false)] : []),
+    cloudflareInternalPlugin,
+    cfhostRegexPrecompilePlugin,
+    htmlObfuscatorPlugin,
+  ],
   jsxFactory: "React.createElement",
   jsxFragment: "React.Fragment",
   logLevel: "silent",
