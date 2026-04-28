@@ -159,7 +159,7 @@ deploy(){
 		name=${names[$i]}
 		uuid=${uuids[$i]}
 		# echo "$n" | grep -P "$NAME_PAT"
-		[[ "$name" =~ $NAME_PAT ]] && deploy_$3 $name $uuid && sleep .5 || echo "invalid name: $name"
+		[[ "$name" =~ $NAME_PAT ]] && deploy_$1 $name $uuid && sleep .5 || echo "invalid name: $name"
 	done
 }
 
